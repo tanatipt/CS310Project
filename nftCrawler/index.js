@@ -1,7 +1,7 @@
 const Web3 = require("web3");
-const { Client } = require("pg");
 const CoinGecko = require("coingecko-api");
 const { Network, Alchemy } = require("alchemy-sdk");
+const pool = require("./database");
 
 const settings = {
   apiKey: "NbAhlcMqXeAN7NBxIxbSTynYbvxTRSUE",
@@ -14,44 +14,7 @@ const web3 = new Web3(
   "https://eth-mainnet.g.alchemy.com/v2/NbAhlcMqXeAN7NBxIxbSTynYbvxTRSUE"
 );
 
-const client = new Client({
-  host: "localhost",
-  user: "postgres",
-  port: 5432,
-  password: "postgres",
-  database: "projectdb",
-});
-
 const CoinGeckoClient = new CoinGecko();
-
-/*
-const events = [
-  "Transfer(address,address,uint256)",
-  "Approval(address,address,uint256)",
-  "ApprovalForAll(address,address,bool)",
-];
-const funcs = [
-  "balanceOf(address)",
-  "ownerOf(uint256)",
-  "safeTransferFrom(address,address,uint256,bytes)",
-  "safeTransferFrom(address,address,uint256)",
-  "transferFrom(address,address,uint256)",
-  "approve(address,uint256)",
-  "setApprovalForAll(address,bool)",
-  "getApproved(uint256)",
-  "isApprovedForAll(address,address)",
-];
-
-const nameABI = [
-  {
-    inputs: [],
-    name: "name",
-    outputs: [{ internalType: "string", name: "", type: "string" }],
-    stateMutability: "view",
-    type: "function",
-  },
-];
-*/
 
 async function createNFTCollectionMap(nfts) {
   const nftCollectionsMap = new Map();
@@ -96,12 +59,14 @@ async function createNFTCollectionMap(nfts) {
     }
   }
 
-  await client.query("DELETE FROM nfts");
-  await client.query("DELETE FROM nftcollections");
-  await client.query("DELETE FROM nfts30days");
-  await client.query("DELETE FROM nfts60days");
-  await client.query("DELETE FROM nfts90days");
-  await client.query("DELETE FROM nftsalltime");
+  /*
+  await pool.query("DELETE FROM nfts");
+  await pool.query("DELETE FROM nftcollections");
+  await pool.query("DELETE FROM nfts30days");
+  await pool.query("DELETE FROM nfts60days");
+  await pool.query("DELETE FROM nfts90days");
+  await pool.query("DELETE FROM nftsalltime");
+  */
 
   return nftCollectionsMap;
 }
@@ -109,9 +74,7 @@ async function createNFTCollectionMap(nfts) {
 async function NFTIndexer() {
   let currentNFTs = null;
 
-  client.connect();
-
-  const response = await client.query(
+  const response = await pool.query(
     " SELECT * FROM nfts NATURAL JOIN nfts30days NATURAL JOIN nfts60days NATURAL JOIN nfts90days NATURAL JOIN nftsalltime NATURAL RIGHT JOIN nftcollections;"
   );
 
@@ -122,7 +85,7 @@ async function NFTIndexer() {
   const [nftCollections, blocksInfo] = await NFTCrawler(currentNFTs);
 
   for (let [blockNo, blockInfo] of blocksInfo) {
-    await client.query("INSERT INTO blocks VALUES ($1, $2, $3)", [
+    await pool.query("INSERT INTO blocks VALUES ($1, $2, $3)", [
       blockNo,
       blockInfo.dateMined,
       blockInfo.etherUsdRate,
@@ -130,7 +93,7 @@ async function NFTIndexer() {
   }
 
   for (let [contractAddress, contractDetails] of nftCollections) {
-    await client.query("INSERT INTO nftcollections VALUES ($1,$2, $3, $4,$5)", [
+    await pool.query("INSERT INTO nftcollections VALUES ($1,$2, $3, $4,$5)", [
       contractAddress,
       contractDetails.creator,
       contractDetails.deployedAt,
@@ -145,7 +108,7 @@ async function NFTIndexer() {
       const sixtydaysData = tokenInfo.sixtyDays;
       const ninetydaysData = tokenInfo.ninetyDays;
 
-      await client.query("INSERT INTO nfts VALUES ($1,$2,$3,$4,$5, $6, $7)", [
+      await pool.query("INSERT INTO nfts VALUES ($1,$2,$3,$4,$5, $6, $7)", [
         contractAddress,
         tokenID,
         tokenInfo.lastSoldPrice,
@@ -155,28 +118,28 @@ async function NFTIndexer() {
         tokenInfo.ownerHistory,
       ]);
 
-      await client.query("INSERT INTO nftsalltime VALUES ($1,$2,$3,$4)", [
+      await pool.query("INSERT INTO nftsalltime VALUES ($1,$2,$3,$4)", [
         contractAddress,
         tokenID,
         alltimeData.salesCount,
         alltimeData.accumulatedValue,
       ]);
 
-      await client.query("INSERT INTO nfts30days VALUES ($1,$2,$3,$4)", [
+      await pool.query("INSERT INTO nfts30days VALUES ($1,$2,$3,$4)", [
         contractAddress,
         tokenID,
         thirtydaysData.salesCount,
         thirtydaysData.accumulatedValue,
       ]);
 
-      await client.query("INSERT INTO nfts60days VALUES ($1,$2,$3,$4)", [
+      await pool.query("INSERT INTO nfts60days VALUES ($1,$2,$3,$4)", [
         contractAddress,
         tokenID,
         sixtydaysData.salesCount,
         sixtydaysData.accumulatedValue,
       ]);
 
-      await client.query("INSERT INTO nfts90days VALUES ($1,$2,$3,$4)", [
+      await pool.query("INSERT INTO nfts90days VALUES ($1,$2,$3,$4)", [
         contractAddress,
         tokenID,
         ninetydaysData.salesCount,
@@ -184,8 +147,6 @@ async function NFTIndexer() {
       ]);
     }
   }
-
-  client.end();
 }
 
 function computeNFTRarity(attributes, attributesSummary) {
@@ -402,44 +363,15 @@ function isSameDay(crawlerDate, minedDate) {
   return false;
 }
 
-/*
-async function contractHasMethod(contractCode, signature) {
-  if (contractCode.indexOf(signature.slice(2)) == -1) return false;
-  return true;
-}
-
-async function isERC721Contract(contractAddress) {
-  const contractCode = await web3.eth.getCode(contractAddress);
-
-  for (let event of events) {
-    let eventSignature = web3.eth.abi.encodeEventSignature(event);
-
-    if (contractCode.indexOf(eventSignature.slice(2)) == -1) return false;
-    if (!contractHasMethod(contractCode, eventSignature)) return false;
-  }
-
-  for (let func of funcs) {
-    const funcSignature = web3.eth.abi.encodeFunctionSignature(func);
-
-    if (!contractHasMethod(contractCode, funcSignature)) return false;
-  }
-
-  return true;
-}*/
-
 async function ComputeNFTsRarity(contractAddress) {
   const query = {
     text: "SELECT attributes FROM nfts WHERE contractaddress = $1",
     values: [contractAddress],
   };
 
-  client.connect();
-  const response = await client.query(query);
-
-  client.end();
+  const response = await pool.query(query);
 
   console.log(computeTraitsCount(response.rows));
 }
 
 NFTIndexer();
-//ComputeNFTsRarity("0x209e639a0EC166Ac7a1A4bA41968fa967dB30221");
