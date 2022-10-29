@@ -10,6 +10,22 @@ const settings = {
 
 const alchemy = new Alchemy(settings);
 
+const events = [
+  "Transfer(address,address,uint256)",
+  "Approval(address,address,uint256)",
+  "ApprovalForAll(address,address,bool)",
+];
+const funcs = [
+  "balanceOf(address)",
+  "ownerOf(uint256)",
+  "safeTransferFrom(address,address,uint256,bytes)",
+  "safeTransferFrom(address,address,uint256)",
+  "transferFrom(address,address,uint256)",
+  "approve(address,uint256)",
+  "setApprovalForAll(address,bool)",
+  "getApproved(uint256)",
+  "isApprovedForAll(address,address)",
+];
 const web3 = new Web3(
   "https://eth-mainnet.g.alchemy.com/v2/NbAhlcMqXeAN7NBxIxbSTynYbvxTRSUE"
 );
@@ -27,7 +43,6 @@ async function createNFTCollectionMap(nfts) {
         creator: nft.creator,
         deployedAt: nft.blockdeployedat,
         name: nft.name,
-        totalSupply: nft.totalsupply,
       });
     }
 
@@ -55,18 +70,17 @@ async function createNFTCollectionMap(nfts) {
         minedAt: nft.minedat,
         attributes: nft.attributes,
         ownerHistory: nft.ownerhistory,
+        image: nft.imageurl,
       });
     }
   }
 
-  /*
   await pool.query("DELETE FROM nfts");
   await pool.query("DELETE FROM nftcollections");
   await pool.query("DELETE FROM nfts30days");
   await pool.query("DELETE FROM nfts60days");
   await pool.query("DELETE FROM nfts90days");
   await pool.query("DELETE FROM nftsalltime");
-  */
 
   return nftCollectionsMap;
 }
@@ -93,11 +107,10 @@ async function NFTIndexer() {
   }
 
   for (let [contractAddress, contractDetails] of nftCollections) {
-    await pool.query("INSERT INTO nftcollections VALUES ($1,$2, $3, $4,$5)", [
+    await pool.query("INSERT INTO nftcollections VALUES ($1,$2, $3, $4)", [
       contractAddress,
       contractDetails.creator,
       contractDetails.deployedAt,
-      contractDetails.totalSupply,
       contractDetails.name,
     ]);
 
@@ -108,15 +121,20 @@ async function NFTIndexer() {
       const sixtydaysData = tokenInfo.sixtyDays;
       const ninetydaysData = tokenInfo.ninetyDays;
 
-      await pool.query("INSERT INTO nfts VALUES ($1,$2,$3,$4,$5, $6, $7)", [
-        contractAddress,
-        tokenID,
-        tokenInfo.lastSoldPrice,
-        tokenInfo.owner,
-        tokenInfo.minedAt,
-        JSON.stringify(tokenInfo.attributes),
-        tokenInfo.ownerHistory,
-      ]);
+      await pool.query(
+        "INSERT INTO nfts VALUES ($1,$2,$3,$4,$5, $6, $7, $8, to_tsvector($9))",
+        [
+          contractAddress,
+          tokenID,
+          tokenInfo.lastSoldPrice,
+          tokenInfo.owner,
+          tokenInfo.minedAt,
+          JSON.stringify(tokenInfo.attributes),
+          tokenInfo.ownerHistory,
+          tokenInfo.image,
+          computeIndex(tokenInfo.attributes),
+        ]
+      );
 
       await pool.query("INSERT INTO nftsalltime VALUES ($1,$2,$3,$4)", [
         contractAddress,
@@ -149,43 +167,6 @@ async function NFTIndexer() {
   }
 }
 
-function computeNFTRarity(attributes, attributesSummary) {
-  let totalRarity = 1;
-  attributes.forEach(({ trait_type, value }) => {
-    const traitRarity =
-      attributesSummary[trait_type][value] /
-      attributesSummary[trait_type]["Total"];
-
-    totalRarity *= traitRarity;
-  });
-  return totalRarity;
-}
-
-function computeTraitsCount(tokens) {
-  let traitValueCount = {};
-
-  for (let token of tokens) {
-    const tokenAttributes = token.attributes;
-    if (tokenAttributes === null) continue;
-
-    tokenAttributes.forEach(({ trait_type, value }) => {
-      if (!traitValueCount[trait_type]) {
-        traitValueCount[trait_type] = {};
-        traitValueCount[trait_type]["Total"] = 0;
-      }
-
-      if (!traitValueCount[trait_type][value]) {
-        traitValueCount[trait_type][value] = 0;
-      }
-
-      traitValueCount[trait_type]["Total"]++;
-      traitValueCount[trait_type][value]++;
-    });
-  }
-
-  return traitValueCount;
-}
-
 async function NFTCrawler(currentNFTs) {
   let nftCollectionsMap = new Map();
   if (currentNFTs != null) {
@@ -199,7 +180,7 @@ async function NFTCrawler(currentNFTs) {
   let currentDate = new Date();
 
   const maxBlock = await web3.eth.getBlockNumber();
-  for (let i = 15793083; i <= maxBlock; i++) {
+  for (let i = 15005001; i <= 15008000; i++) {
     console.log(i);
     const currentBlock = await web3.eth.getBlock(i, true);
     const minedDate = new Date(currentBlock.timestamp * 1000);
@@ -224,21 +205,17 @@ async function NFTCrawler(currentNFTs) {
       if (transaction.to === null) {
         const receipt = await web3.eth.getTransactionReceipt(transaction.hash);
         const contractAddress = receipt.contractAddress;
-        const contractMetadata = await alchemy.nft.getContractMetadata(
-          contractAddress
-        );
 
-        if (
-          contractMetadata.tokenType === "ERC721" &&
-          contractAddress === "0x461EBd16C01556B40007f311C4415cdBAf7E91b9"
-        ) {
+        if (await isERC721(contractAddress)) {
+          const contractMetadata = await alchemy.nft.getContractMetadata(
+            contractAddress
+          );
           console.log(contractAddress);
           nftCollectionsMap.set(contractAddress, {
             tokensInfo: new Map(),
             creator: receipt.from,
             deployedAt: i,
-            name: contractMetadata.name || null,
-            totalSupply: contractMetadata.totalSupply || null,
+            name: contractMetadata.name.toLowerCase() || "unnamed",
           });
         }
       }
@@ -269,10 +246,23 @@ async function NFTCrawler(currentNFTs) {
           sender ===
           "0x0000000000000000000000000000000000000000000000000000000000000000"
         ) {
-          if (address !== "0x461EBd16C01556B40007f311C4415cdBAf7E91b9")
-            continue;
-          console.log(tokenID);
+          console.log(address + " " + tokenID);
+          let attributes = undefined;
+          let image = undefined;
+
+          /*
           const response = await alchemy.nft.getNftMetadata(address, tokenID);
+          let image = response.rawMetadata.image;
+          let attributes = response.rawMetadata.attributes;
+
+          if (attributes !== null && attributes.length > 0) {
+            convertLowerCase(attributes);
+          }
+
+          if (image && image.startsWith("ipfs://")) {
+            image = "https://ipfs.io/ipfs/" + image.split("ipfs://")[1];
+          }
+          */
 
           nftCollectionsMap.get(address).tokensInfo.set(tokenID, {
             allTime: {
@@ -295,12 +285,11 @@ async function NFTCrawler(currentNFTs) {
             owner: reciever,
             lastSoldPrice: 0,
             minedAt: i,
-            attributes: response.rawMetadata.attributes || null,
+            image: image || "",
+            attributes: attributes || [],
             ownerHistory: [reciever],
           });
         } else {
-          if (address !== "0x461EBd16C01556B40007f311C4415cdBAf7E91b9")
-            continue;
           const transaction = await web3.eth.getTransaction(transactionHash);
           const tokenInfo = nftCollectionsMap
             .get(address)
@@ -350,6 +339,27 @@ async function NFTCrawler(currentNFTs) {
   return [nftCollectionsMap, blocksInfoMap];
 }
 
+function convertLowerCase(attributes) {
+  for (let i = 0; i < attributes.length; i++) {
+    attributes.value = attributes.value.toLowerCase();
+    attributes.trait_type = attributes.trait_type.toLowerCase();
+  }
+}
+
+function computeIndex(attributes) {
+  if (attributes.length === 0) {
+    return "";
+  } else {
+    let indexString = "";
+    attributes.forEach(({ trait_type, value }) => {
+      indexString =
+        indexString + " " + trait_type + " " + value.replace(" ", ".");
+    });
+
+    return indexString;
+  }
+}
+
 function isSameDay(crawlerDate, minedDate) {
   if (crawlerDate === null) return false;
 
@@ -363,7 +373,145 @@ function isSameDay(crawlerDate, minedDate) {
   return false;
 }
 
-async function ComputeNFTsRarity(contractAddress) {
+async function isERC721(contractAddress) {
+  const code = await web3.eth.getCode(contractAddress);
+
+  for (let event of events) {
+    const eventSig = web3.eth.abi.encodeEventSignature(event);
+    if (code.indexOf(eventSig.slice(2, eventSig.length)) === -1) return false;
+  }
+
+  for (let func of funcs) {
+    const funcSig = web3.eth.abi.encodeFunctionSignature(func);
+    if (code.indexOf(funcSig.slice(2, funcSig.length)) === -1) return false;
+  }
+
+  return true;
+}
+
+NFTIndexer();
+//updateImageURL();
+//updateJsonArray();
+//updateIndex();
+
+/*
+async function updateIndex() {
+  const response = await pool.query("SELECT * FROM nfts");
+  for (let i = 0; i < response.rowCount; i++) {
+    console.log(i);
+    const nft = response.rows[i];
+    const attributes = nft.attributes;
+    let string = "";
+    if (attributes.length === 0) {
+      await pool.query(
+        "UPDATE nfts SET index = to_tsvector('') WHERE tokenid = $1",
+        [nft.tokenid]
+      );
+    } else {
+      attributes.forEach(({ trait_type, value }) => {
+        string =
+          string +
+          " " +
+          trait_type.replace(" ", ".") +
+          " " +
+          value.replace(" ", ".");
+      });
+
+      console.log(string);
+
+      await pool.query(
+        "UPDATE nfts SET index = to_tsvector($1) WHERE tokenid = $2",
+        [string, nft.tokenid]
+      );
+    }
+  }
+}*/
+
+/*
+async function updateJsonArray() {
+  const response = await pool.query("SELECT * FROM nfts");
+  for (let i = 0; i < response.rowCount; i++) {
+    console.log(i);
+    const nft = response.rows[i];
+    const attributes = nft.attributes;
+
+    if (attributes === null) continue;
+    for (let i = 0; i < attributes.length; i++) {
+      attributes[i].value = attributes[i].value.toLowerCase();
+      attributes[i].trait_type = attributes[i].trait_type.toLowerCase();
+    }
+
+    await pool.query("UPDATE nfts SET attributes = $1 WHERE tokenid = $2", [
+      JSON.stringify(attributes),
+      nft.tokenid,
+    ]);
+  }
+}
+*/
+
+/*
+async function updateImageURL() {
+  console.log("Here");
+  const response = await pool.query("SELECT * FROM nfts");
+  for (let i = 9999; i < response.rowCount; i++) {
+    console.log(i);
+    const nft = response.rows[i];
+    const metadata = await alchemy.nft.getNftMetadata(
+      nft.contractaddress,
+      nft.tokenid
+    );
+
+    let image = metadata.rawMetadata.image;
+    console.log(image);
+    if (image && image.startsWith("ipfs://")) {
+      image = "https://ipfs.io/ipfs/" + image.split("ipfs://")[1];
+    }
+
+    await pool.query("UPDATE nfts SET imageurl = $1 WHERE tokenid = $2", [
+      image,
+      nft.tokenid,
+    ]);
+  }
+}*/
+
+/*
+function computeNFTRarity(attributes, attributesSummary) {
+  let totalRarity = 1;
+  attributes.forEach(({ trait_type, value }) => {
+    const traitRarity =
+      attributesSummary[trait_type][value] /
+      attributesSummary[trait_type]["Total"];
+
+    totalRarity *= traitRarity;
+  });
+  return totalRarity;
+}
+
+function computeTraitsCount(tokens) {
+  let traitValueCount = {};
+
+  for (let token of tokens) {
+    const tokenAttributes = token.attributes;
+    if (tokenAttributes === null) continue;
+
+    tokenAttributes.forEach(({ trait_type, value }) => {
+      if (!traitValueCount[trait_type]) {
+        traitValueCount[trait_type] = {};
+        traitValueCount[trait_type]["Total"] = 0;
+      }
+
+      if (!traitValueCount[trait_type][value]) {
+        traitValueCount[trait_type][value] = 0;
+      }
+
+      traitValueCount[trait_type]["Total"]++;
+      traitValueCount[trait_type][value]++;
+    });
+  }
+
+  return traitValueCount;
+
+  async function ComputeNFTsRarity(contractAddress) {
   const query = {
     text: "SELECT attributes FROM nfts WHERE contractaddress = $1",
     values: [contractAddress],
@@ -373,5 +521,4 @@ async function ComputeNFTsRarity(contractAddress) {
 
   console.log(computeTraitsCount(response.rows));
 }
-
-NFTIndexer();
+}*/
