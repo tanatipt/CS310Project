@@ -7,15 +7,10 @@ const web3 = new Web3(
   "https://eth-mainnet.g.alchemy.com/v2/NbAhlcMqXeAN7NBxIxbSTynYbvxTRSUE"
 );
 
-/*
-\COPY (SELECT id,query, name, tokensavailable, totalvolume, floorprice, ownercount, totalsales FROM 
-  queries 
-  CROSS JOIN (SELECT contractaddress,name, COALESCE(tokensavailable,0) AS tokensavailable,COALESCE(totalvolume, 0) AS totalvolume, COALESCE(floorprice, 0) AS floorprice, COALESCE(ownercount ,0) AS ownercount, COALESCE(totalsales,0) as totalsales FROM nftcollections 
+SELECT contractaddress,name, COALESCE(tokensavailable,0) AS tokensavailable,COALESCE(totalvolume, 0) AS totalvolume, COALESCE(floorprice, 0) AS floorprice, COALESCE(ownercount ,0) AS ownercount, COALESCE(totalsales,0) as totalsales FROM nftcollections 
   JOIN blocks ON blocknumber = blockdeployedatNATURAL LEFT JOIN (SELECT contractaddress, sum(accumulatedvaluealltime) as totalvolume, sum(salescountalltime) as totalsales FROM nftsalltime GROUP BY contractaddress) A 
   NATURAL LEFT JOIN (SELECT contractaddress, COUNT(DISTINCT owner) as ownercount,COUNT(tokenid) as tokensavailable FROM nfts GROUP BY contractaddress) B 
-  NATURAL LEFT JOIN (SELECT contractaddress, MIN(lastsoldprice) as floorprice FROM nfts WHERE lastsoldprice > 0 GROUP BY contractaddress) C) d WHERE name ILIKE  CONCAT(CONCAT('%',query),'%')) 
-  TO 'C:\Users\User\Documents\CS310Project\ranking\collections.csv' CSV HEADER
-*/
+  NATURAL LEFT JOIN (SELECT contractaddress, MIN(lastsoldprice) as floorprice FROM nfts WHERE lastsoldprice > 0 GROUP BY contractaddress) C) d 
 
 /*SELECT contractaddress, name, tokenid, name || ' #' || tokenid as token, lastsoldprice, attributes, datemined FROM nftcollections NATURAL JOIN nfts JOIN blocks ON minedat = blocknumber WHERE attributes is not null; */
 app.use(cors());

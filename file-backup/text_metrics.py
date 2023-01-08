@@ -64,3 +64,23 @@ def levenshteinDistance(str1, str2):
                     min([array[n+1][m], array[n][m+1], array[n+1][m+1]])
 
     return array[0][0]
+
+
+def keyword_generator(keyword):
+    words_list = []
+    try:
+        antonym = Antonyms(search_string=keyword)
+        hypernym = Hypernyms(search_string=keyword)
+        antonym_results = antonym.find_antonyms()
+        hypernym_results = hypernym.find_hypernyms()
+
+        if (type(antonym_results) is list):
+            words_list.extend(antonym_results)
+
+        if (type(hypernym_results) is list):
+            words_list.extend(hypernym_results)
+
+    finally:
+        words_list.extend(keyword)
+        return words_list
+    return words_list
